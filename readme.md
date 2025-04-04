@@ -1,6 +1,18 @@
 # AWS Glue  - Log Analysis Pipelines
 
-To use this script, you'll need to install the dependencies listed in the `requirements.txt` file. You can do this using pip:
+This project implements a `serverless log analysis` solution using **AWS services** to process and analyze application logs. The system automatically discovers log schemas, creates queryable tables, and enables SQL-based analysis without traditional ETL processes or database loading.
+
+Following is the AWS architecture diagram for it.
+
+![diagram](./Images/diagram.png)
+
+#### Log Generation
+
+Generate sample log data using Python script `main.py`. This script creates JSON log files with a specified number of entries and partitions them by service, year, month, and day.
+
+I used `faker` library` to generate realistic log entries, including timestamps, log levels, service names, HTTP methods, endpoints, and response times.
+
+Install the dependencies listed in the `requirements.txt` file. You can do this using pip:
 
 ```bash
 >>> python3 -m pip install -r requirements.txt
@@ -9,10 +21,10 @@ To use this script, you'll need to install the dependencies listed in the `requi
 Then run the script:
 
 ```bash
->>> python main.py --days 30 --entries 5000 --output-dir ./app_logs
+>>> python main.py --days 30 --entries 5000 --output-dir ./logs
 ```
 
-If you just run `python3 main.py`, it will use following default values for `days`, `entries`, and `output-dir`:
+If you run `python3 main.py` without any `arguments`, it will use the default values for `days`, `entries`, and `output-dir`:
 
 - days = 7
 - entries = 1000
@@ -24,21 +36,31 @@ This will generate JSON log files with the following structure:
 - Each log entry contains fields like timestamp, log level, service name, HTTP method, endpoint, etc.
 - Files are named like `logs_api-gateway_20250403.json`
 
-Create an `S3 Bucket`
+Install `awscli` if you haven't already to proceed with following steps.
+
+And then run `aws configure` to configure `awscli` with `secret key` and `access key`.
+
+#### Amazon S3
+
+Create an `S3 Bucket` to store the generated logs. You can do this using the `awscli`.
 
 ```bash
 >>> aws s3 mb s3://hack-with-harsha-logs
 ```
 
-Upload the `generated logs`
+Upload the `generated logs` using `aws s3 sync` command.
 
 ```bash
 >>> aws s3 sync ./logs s3://hack-with-harsha-logs/logs/ --exclude "*" --include "*.json"
 ```
 
-Use Glue Crawler to automatically discover schema and create tables in the Data Catalog. 
+#### AWS Glue Crawler 
+
+Use `Glue Crawler` to automatically discover schema and create tables in the `Data Catalog`.
 
 For this, we need to create a role for glue to access the S3 bucket.
+
+> [!IMPORTANT] Try to understand `trust-policy.json` file.. Here, we are attaching this role to `Glue`. so that, only `Glue` can assume this role.
 
 ```bash
 >>> aws iam create-role \
@@ -47,7 +69,9 @@ For this, we need to create a role for glue to access the S3 bucket.
   --description "IAM Role for AWS Glue Crawler"
 ```
 
-Attach AWS Managed `Glue Service Role` Policy to the newly created role. This will allow `crawler` interact with other Glue components like the `Data Catalog`.
+Attach AWS Managed `Glue Service Role` Policy to the newly created role.
+
+This will allow `crawler` interact with other Glue components like the `Data Catalog`.
 
 ```bash
 >>> aws iam attach-role-policy \
@@ -55,7 +79,7 @@ Attach AWS Managed `Glue Service Role` Policy to the newly created role. This wi
   --policy-arn arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
 ```
 
-Put the Inline Policy to the `Role`
+Put the `Inline Policy` to the `Role`
 
 ```bash
 >>> aws iam put-role-policy \
@@ -82,14 +106,12 @@ Create a Glue Crawler
   --targets '{"S3Targets": [{"Path": "s3://hack-with-harsha-logs/logs/"}]}'
 ```
 
-Now, we go to console and edit the crawler like in the following screenshot.
+Now, we go to console and edit the crawler like in the screenshot.
 
 ![aws_options](./Images/aws_options.jpg)
 
--> Check ✅ the option `Create a single schema for each S3 path`.
-
--> Set `Table level` to 2
-
+- Check ✅ the option `Create a single schema for each S3 path`.
+- Set `Table level` to 2
   - `logs/${service}/` → Level 2 (creates tables at the service level)
   - `logs/${service}/${year}/...` → If set to 3, it groups tables by year (not recommended for our case).
 
@@ -104,18 +126,20 @@ Run the crawler
 >>> aws glue start-crawler --name app-logs-crawler
 ```
 
-Once complete, the crawler will create tables like `logs_api_gateway`, `logs_authentication`, etc. with the proper schema inferred from the JSON logs.
+Once complete, the crawler will create tables like `api_gateway`, `authentication`, etc. with the proper schema inferred from the JSON logs.
 
 Now, time to query the logs directly using Athena without having to load them into a database.
 
+#### Amazon Athena
+
 Create an `Athena workgroup` (optional but recommended for cost control).
 
-An `Athena workgroup` is a logical container in which your Athena queries run. It allows you to:
 
-- Separate queries by team, environment, or use case.
-- Track costs and set query limits (so no surprise bills).
-- Define a default S3 output location for query results.
-- Monitor query performance and usage per workgroup.
+> [!IMPORTANT] An `Athena workgroup` is a logical container in which your Athena queries run. It allows you to:
+> * Separate queries by team, environment, or use case.
+> * Track costs and set query limits (so no surprise bills).
+> * Define a default S3 output location for query results.
+> * Monitor query performance and usage per workgroup.
 
 ```bash
 >>> aws athena create-work-group \
@@ -128,7 +152,7 @@ Sample queries to run in Athena:
 ```sql
 -- Count logs by service and level
 SELECT service, level, COUNT(*) as count
-FROM app_logs_db.logs_api_gateway
+FROM "app_logs_db"."api_gateway"
 GROUP BY service, level
 ORDER BY count DESC;
 ```
@@ -136,7 +160,7 @@ ORDER BY count DESC;
 ```sql
 -- Find slow API responses
 SELECT timestamp, endpoint, response_time_ms, status_code
-FROM app_logs_db.logs_api_gateway
+FROM "app_logs_db"."api_gateway"
 WHERE response_time_ms > 1000
 ORDER BY response_time_ms DESC
 LIMIT 100;
@@ -146,11 +170,13 @@ LIMIT 100;
 -- Error analysis
 SELECT date_trunc('hour', from_iso8601_timestamp(timestamp)) as hour,
        service, status_code, COUNT(*) as error_count
-FROM app_logs_db.logs_api_gateway
+FROM "app_logs_db"."api_gateway"
 WHERE level = 'ERROR'
 GROUP BY 1, 2, 3
 ORDER BY hour DESC, error_count DESC;
 ```
+
+#### Schedule Crawler
 
 Create scheduled crawlers to keep the schema updated as log formats evolve
 
@@ -159,16 +185,4 @@ Create scheduled crawlers to keep the schema updated as log formats evolve
 >>> aws glue update-crawler \
   --name app-logs-crawler \
   --schedule "cron(0 */6 * * ? *)"
-```
-
-Configure `CloudWatch Events` to trigger the `crawler` when new data arrives.
-
-```bash
-aws events put-rule \
-  --name logs-upload-trigger \
-  --event-pattern '{"source":["aws.s3"],"detail-type":["AWS API Call via CloudTrail"],"detail":{"eventSource":["s3.amazonaws.com"],"eventName":["PutObject","CompleteMultipartUpload"],"requestParameters":{"bucketName":["hack-with-harsha-logs"]}}}'
-
-aws events put-targets \
-  --rule logs-upload-trigger \
-  --targets 'Id"="1","Arn"="arn:aws:glue:region:account-id:crawler/app-logs-crawler"'
 ```
