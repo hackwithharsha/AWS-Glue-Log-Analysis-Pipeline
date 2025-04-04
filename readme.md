@@ -60,7 +60,8 @@ Use `Glue Crawler` to automatically discover schema and create tables in the `Da
 
 For this, we need to create a role for glue to access the S3 bucket.
 
-> [!IMPORTANT] Try to understand `trust-policy.json` file.. Here, we are attaching this role to `Glue`. so that, only `Glue` can assume this role.
+> [!IMPORTANT]
+> Try to understand `trust-policy.json` file.. Here, we are attaching this role to `Glue`. so that, only `Glue` can assume this role.
 
 ```bash
 >>> aws iam create-role \
@@ -134,8 +135,8 @@ Now, time to query the logs directly using Athena without having to load them in
 
 Create an `Athena workgroup` (optional but recommended for cost control).
 
-
-> [!IMPORTANT] An `Athena workgroup` is a logical container in which your Athena queries run. It allows you to:
+> [!IMPORTANT]
+> An `Athena workgroup` is a logical container in which your Athena queries run. It allows you to:
 > * Separate queries by team, environment, or use case.
 > * Track costs and set query limits (so no surprise bills).
 > * Define a default S3 output location for query results.
